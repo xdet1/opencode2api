@@ -253,7 +253,7 @@ func (m *RuntimeController) selectWARP(cfg config.Config) (*warp.Pool, string, b
 	}
 	ctx, cancel := context.WithTimeout(m.root, timeout)
 	defer cancel()
-	pool, err := warp.NewWithOptions(ctx, m.logger, warp.Options{Size: cfg.Warp.PoolSize, Stack: warp.Stack(cfg.Warp.Stack), SourceIPv6: source})
+	pool, err := warp.NewWithOptions(ctx, m.logger, warp.Options{Size: cfg.Warp.PoolSize, Stack: warp.Stack(cfg.Warp.Stack), SourceIPv6: source, StatePath: warpStatePath(m.configPath)})
 	if err != nil {
 		return nil, "", false, fmt.Errorf("initialize WARP egress: %w", err)
 	}
@@ -655,4 +655,13 @@ func keyStatuses(tier string, pool *upstreamNodes) []KeyStatus {
 		result = append(result, status)
 	}
 	return result
+}
+
+// warpStatePath names the file that carries rejected WARP egress blocks across
+// restarts. It lives next to config.json so the existing volume keeps it.
+func warpStatePath(configPath string) string {
+	if configPath == "" {
+		return ""
+	}
+	return configPath + ".warp-state.json"
 }

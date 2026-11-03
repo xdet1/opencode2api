@@ -193,7 +193,7 @@ func (g *Gateway) doWARPAttempt(ctx context.Context, req *http.Request, baseURL,
 		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
 			body = peekResponseBody(resp)
 		}
-		g.warp.Report(lease, resp.StatusCode, body)
+		g.warp.ReportWithRetryAfter(lease, resp.StatusCode, body, parseRetryAfter(resp.Header.Get("Retry-After")))
 	}
 	resp.Body = &warpBody{ReadCloser: resp.Body, lease: owned, diagnostic: diagnostic}
 	return resp, label, nil
@@ -318,7 +318,9 @@ func (g *Gateway) doWarpAnonymousUpstream(ctx context.Context, route models.Rout
 				break
 			}
 		}
-		if halted || ctx.Err() != nil {
+		// A WARP pool with no exit cannot be fixed by spending the remaining
+		// attempts; return 503 now instead of hanging into the edge timeout.
+		if halted || ctx.Err() != nil || errors.Is(lastErr, errWARPUnavailable) {
 			break
 		}
 		if !leaseBlocked && upstreamStatus(lastResponse) != http.StatusTooManyRequests {

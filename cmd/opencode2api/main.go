@@ -28,6 +28,7 @@ func main() {
 	configPath := flag.String("config", "config.json", "path to config.json")
 	listen := flag.String("listen", "", "override the configured API listen address")
 	webListen := flag.String("web-listen", "", "override the configured WebUI listen address")
+	webSamePort := flag.Bool("web-same-port", false, "serve the WebUI on the API listener")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -62,16 +63,20 @@ func main() {
 		Addr: cfg.Listen, Handler: manager.Handler(), ReadHeaderTimeout: 15 * time.Second, IdleTimeout: 120 * time.Second,
 	}
 	servers := []*http.Server{apiServer}
-	go serveHTTP(cancel, logger, apiServer, "api")
 
 	if cfg.WebUI.Enabled {
 		admin := adminui.New(manager, monitor, hub, logger)
-		webServer := &http.Server{
-			Addr: cfg.WebUI.Listen, Handler: admin.Handler(), ReadHeaderTimeout: 15 * time.Second, IdleTimeout: 120 * time.Second,
+		if *webSamePort {
+			apiServer.Handler = samePortHandler(apiServer.Handler, admin.Handler())
+		} else {
+			webServer := &http.Server{
+				Addr: cfg.WebUI.Listen, Handler: admin.Handler(), ReadHeaderTimeout: 15 * time.Second, IdleTimeout: 120 * time.Second,
+			}
+			servers = append(servers, webServer)
+			go serveHTTP(cancel, logger, webServer, "webui")
 		}
-		servers = append(servers, webServer)
-		go serveHTTP(cancel, logger, webServer, "webui")
 	}
+	go serveHTTP(cancel, logger, apiServer, "api")
 
 	<-ctx.Done()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -81,6 +86,18 @@ func main() {
 			logger.Error("graceful shutdown failed", "component", "server", "event", "shutdown_failed", "address", server.Addr, "error", err)
 		}
 	}
+}
+
+// samePortHandler serves the management WebUI and the API from one listener.
+// The route sets are disjoint: the gateway owns /v1/ and /healthz, while the
+// UI owns /api/ and the embedded assets. Mounting the UI at "/" makes the
+// existing public port usable for both without a reverse proxy.
+func samePortHandler(api, ui http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/v1/", api)
+	mux.Handle("/healthz", api)
+	mux.Handle("/", ui)
+	return mux
 }
 
 // serveHTTP serves server until it is shut down. An unexpected stop is logged
